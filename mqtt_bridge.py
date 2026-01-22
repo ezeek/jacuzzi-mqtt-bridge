@@ -314,7 +314,25 @@ class PureJacuzziMQTTBridge:
                 else:
                     logger.error(f"Unknown filter2_mode: {payload}")
             
-            # Note: heat_mode is read-only (controlled via ProLink app only)
+            elif command == "heat_mode":
+                # Home Assistant select sends text payloads ("Eco", "Auto", "Day")
+                # Internal numeric mapping from spa.get_heatmode(False): 0=Auto, 1=Eco, 2=Day
+                mode_map = {"Auto": 0, "Eco": 1, "Day": 2}
+                if payload in mode_map:
+                    mode = mode_map[payload]
+                else:
+                    mode = int(payload)
+
+                if mode not in (0, 1, 2):
+                    logger.error(f"Unknown heat_mode: {payload}")
+                    return
+
+                logger.info(f"Setting heat_mode: {payload} ({mode})")
+                # Send exactly what the ProLink app sends:
+                # 7e 06 0a bf 1a <mode> <crc> 7e
+                await self.spa.send_message(self.spa.channel, 0xBF, 0x1A, mode)
+
+            
                 
         except Exception as e:
             logger.error(f"Error sending command: {e}", exc_info=True)
@@ -419,21 +437,22 @@ class PureJacuzziMQTTBridge:
             retain=True
         )
         
-        # Heat mode - Auto/Eco/Day (read-only sensor)
-        # Jacuzzi ProLink does not support heat mode changes via WiFi
+        # Heat mode - Auto/Eco/Day (editable select)
         self.mqtt.publish(
-            f"{base}/sensor/jacuzzi_heatmode/config",
+            f"{base}/select/jacuzzi_heatmode/config",
             json.dumps({
                 "name": "Jacuzzi Heat Mode",
                 "state_topic": f"{MQTT_BASE_TOPIC}/heat_mode",
+                "command_topic": f"{MQTT_BASE_TOPIC}/heat_mode/set",
+                "options": ["Eco", "Auto", "Day"],
                 "icon": "mdi:heat-wave",
                 "unique_id": "jacuzzi_heatmode",
                 "device": device
             }),
             retain=True
         )
-        
-        # Heat state - Idle/Heating/Heat Waiting (read-only sensor)
+
+# Heat state - Idle/Heating/Heat Waiting (read-only sensor)
         self.mqtt.publish(
             f"{base}/sensor/jacuzzi_heatstate/config",
             json.dumps({
