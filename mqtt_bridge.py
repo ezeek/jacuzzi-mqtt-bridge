@@ -800,15 +800,9 @@ class PureJacuzziMQTTBridge:
             logger.info(f"Publishing heat_mode: {heatmode_text} (value={heatmode})")
             self.mqtt.publish(f"{MQTT_BASE_TOPIC}/heat_mode", heatmode_text)
             
-            # Heat state - show if heater is actively heating
-            heatstate = self.spa.get_heatstate(False)  # 0=Idle, 1=Heating, 2=Heat Waiting
-            heatstate_names = {0: "Idle", 1: "Heating", 2: "Heat Waiting"}
-            heatstate_text = heatstate_names.get(heatstate, f"Unknown ({heatstate})")
-            heater_on = "ON" if heatstate == 1 else "OFF"
-            logger.info(f"Publishing heat_state: {heatstate_text} (value={heatstate})")
-            logger.info(f"Publishing heater_on: {heater_on}")
-            self.mqtt.publish(f"{MQTT_BASE_TOPIC}/heat_state", heatstate_text)
-            self.mqtt.publish(f"{MQTT_BASE_TOPIC}/heater_on", heater_on)
+            # Heat state / heater_on - published in real-time from debug_process_message
+            # using bit 1 of byte 14 (electrically verified correct method)
+            # No longer publishing here to avoid overwriting with pyjacuzzi's potentially incorrect values
             
             # Circulation pump - direct attribute access
             # circ_pump_status: 1=ON, 0=OFF
@@ -1099,6 +1093,26 @@ class PureJacuzziMQTTBridge:
                         logger.info(f"       Temp: {temp}°F, SetTemp: {settemp}°F, Pump1: {pump1}, Pump2: {pump2}")
                         logger.info(f"       🔥 BYTE 10: 0x{byte10:02X} = 0b{byte10:08b}")
                         logger.info(f"          HeatMode (bits 5,4): {heatmode} | HeatState (bits 1,0): {heatstate}")
+                        
+                        # HEATER STATUS - Check bit 0 of byte 16 (electrical verification)
+                        # Bit 0 set (0x01) = Heater ON, Bit 0 clear = Heater OFF
+                        if len(data) > 16:
+                            byte16 = data[16]
+                            heater_bit = byte16 & 0x01  # Extract bit 0
+                            
+                            raw_heater_on = "ON" if heater_bit == 1 else "OFF"
+                            raw_heat_state = "Heating" if heater_bit == 1 else "Idle"
+                            
+                            logger.info(f"       🔥 BYTE 16: 0x{byte16:02X} = 0b{byte16:08b}")
+                            logger.info(f"          Heater bit (bit 0): {heater_bit} -> heater_on={raw_heater_on}, heat_state={raw_heat_state}")
+                            
+                            # Publish immediately to MQTT
+                            try:
+                                if self.mqtt:
+                                    self.mqtt.publish(f"{MQTT_BASE_TOPIC}/heater_on", raw_heater_on)
+                                    self.mqtt.publish(f"{MQTT_BASE_TOPIC}/heat_state", raw_heat_state)
+                            except Exception as e:
+                                logger.debug(f"MQTT publish failed for heater status: {e}")
                 
                 # Call original method
                 return original_process_message(data)
