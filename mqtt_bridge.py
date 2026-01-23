@@ -333,6 +333,10 @@ class PureJacuzziMQTTBridge:
             if command == "target_temperature":
                 temp = float(payload)
                 logger.info(f"Sending temp change: {temp}")
+                
+                # Publish optimistic state immediately
+                self.mqtt.publish(f"{MQTT_BASE_TOPIC}/set_temperature", str(int(temp)))
+                
                 await self.spa.send_temp_change(temp)
                 
             elif command == "pump_1":
@@ -340,6 +344,11 @@ class PureJacuzziMQTTBridge:
                 if payload.upper() in state_map:
                     state = state_map[payload.upper()]
                     logger.info(f"Sending pump 1 command: {state}")
+                    
+                    # Publish optimistic state immediately to prevent UI flip-flop
+                    state_text = "ON" if state == 1 else "OFF"
+                    self.mqtt.publish(f"{MQTT_BASE_TOPIC}/pump_1", state_text)
+                    
                     await self._set_2state_pump(1, state)
                 else:
                     logger.error(f"Unknown pump_1 payload: {payload}")
@@ -349,6 +358,11 @@ class PureJacuzziMQTTBridge:
                 if payload.upper() in state_map:
                     state = state_map[payload.upper()]
                     logger.info(f"Sending pump 2 command: {state}")
+                    
+                    # Publish optimistic state immediately to prevent UI flip-flop
+                    state_text = "ON" if state == 1 else "OFF"
+                    self.mqtt.publish(f"{MQTT_BASE_TOPIC}/pump_2", state_text)
+                    
                     await self._set_2state_pump(2, state)
                 else:
                     logger.error(f"Unknown pump_2 payload: {payload}")
@@ -430,6 +444,14 @@ class PureJacuzziMQTTBridge:
                 # 7e 06 0a bf 1a <mode> <crc> 7e
                 await self.spa.send_message(self.spa.channel, 0xBF, 0x1A, mode)
 
+            elif command == "filter_boost":
+                # Filter boost command from ProLink app analysis:
+                # Sends 0x17 0x0d which toggles on filtration pumps
+                # Spa controller handles 20-minute timer and auto-off
+                logger.info("Sending filter boost command (0x17 0x0d)")
+                raw_cmd = bytes.fromhex("7e060abf170da37e")
+                self.spa.writer.write(raw_cmd)
+                await self.spa.writer.drain()
             
                 
         except Exception as e:
@@ -501,6 +523,20 @@ class PureJacuzziMQTTBridge:
                 "payload_on": "ON",
                 "payload_off": "OFF",
                 "unique_id": "jacuzzi_pump2",
+                "device": device
+            }),
+            retain=True
+        )
+        
+        # Filter Boost (button)
+        self.mqtt.publish(
+            f"{base}/button/jacuzzi_filter_boost/config",
+            json.dumps({
+                "name": "Jacuzzi Filter Boost",
+                "command_topic": f"{MQTT_BASE_TOPIC}/filter_boost/set",
+                "payload_press": "ON",
+                "unique_id": "jacuzzi_filter_boost",
+                "icon": "mdi:pump",
                 "device": device
             }),
             retain=True
