@@ -444,6 +444,13 @@ class PureJacuzziMQTTBridge:
                 # 7e 06 0a bf 1a <mode> <crc> 7e
                 await self.spa.send_message(self.spa.channel, 0xBF, 0x1A, mode)
 
+            elif command == "climate_mode":
+                # Climate entity mode command (heat/off)
+                # For a hot tub, we always stay in "heat" mode
+                # Just acknowledge the command by publishing back
+                logger.info(f"Climate mode command: {payload} (hot tub always heating)")
+                self.mqtt.publish(f"{MQTT_BASE_TOPIC}/climate_mode", "heat")
+
             elif command == "filter_boost":
                 # Filter boost command from ProLink app analysis:
                 # Sends 0x17 0x0d which toggles on filtration pumps
@@ -493,6 +500,28 @@ class PureJacuzziMQTTBridge:
                 "max": 104,
                 "unit_of_measurement": "°F",
                 "unique_id": "jacuzzi_target",
+                "device": device
+            }),
+            retain=True
+        )
+        
+        # Climate entity (thermostat-style control)
+        self.mqtt.publish(
+            f"{base}/climate/jacuzzi/config",
+            json.dumps({
+                "name": "Jacuzzi",
+                "unique_id": "jacuzzi_climate",
+                "modes": ["heat", "off"],
+                "mode_state_topic": f"{MQTT_BASE_TOPIC}/climate_mode",
+                "mode_command_topic": f"{MQTT_BASE_TOPIC}/climate_mode/set",
+                "action_topic": f"{MQTT_BASE_TOPIC}/climate_action",
+                "current_temperature_topic": f"{MQTT_BASE_TOPIC}/temperature",
+                "temperature_command_topic": f"{MQTT_BASE_TOPIC}/target_temperature/set",
+                "temperature_state_topic": f"{MQTT_BASE_TOPIC}/target_temperature",
+                "temp_step": 1,
+                "min_temp": 50,
+                "max_temp": 104,
+                "temperature_unit": "F",
                 "device": device
             }),
             retain=True
@@ -802,6 +831,10 @@ class PureJacuzziMQTTBridge:
             if settemp is not None:
                 logger.info(f"Publishing target_temperature: {settemp}")
                 self.mqtt.publish(f"{MQTT_BASE_TOPIC}/target_temperature", str(settemp))
+            
+            # Climate mode for climate entity (always "heat" for hot tub)
+            # Hot tubs are always in heating mode when powered on
+            self.mqtt.publish(f"{MQTT_BASE_TOPIC}/climate_mode", "heat")
             
             # Pump 1 - using get_pump() like terminal UI
             # Pump reports state 2 when ON, but we normalize to ON/OFF
@@ -1139,14 +1172,18 @@ class PureJacuzziMQTTBridge:
                             raw_heater_on = "ON" if heater_bit == 1 else "OFF"
                             raw_heat_state = "Heating" if heater_bit == 1 else "Idle"
                             
+                            # Climate action for climate entity (heating/idle)
+                            climate_action = "heating" if heater_bit == 1 else "idle"
+                            
                             logger.info(f"       🔥 BYTE 16: 0x{byte16:02X} = 0b{byte16:08b}")
-                            logger.info(f"          Heater bit (bit 0): {heater_bit} -> heater_on={raw_heater_on}, heat_state={raw_heat_state}")
+                            logger.info(f"          Heater bit (bit 0): {heater_bit} -> heater_on={raw_heater_on}, heat_state={raw_heat_state}, climate_action={climate_action}")
                             
                             # Publish immediately to MQTT
                             try:
                                 if self.mqtt:
                                     self.mqtt.publish(f"{MQTT_BASE_TOPIC}/heater_on", raw_heater_on)
                                     self.mqtt.publish(f"{MQTT_BASE_TOPIC}/heat_state", raw_heat_state)
+                                    self.mqtt.publish(f"{MQTT_BASE_TOPIC}/climate_action", climate_action)
                             except Exception as e:
                                 logger.debug(f"MQTT publish failed for heater status: {e}")
                 
