@@ -50,7 +50,9 @@ views:
             heading: 💨 Jets
           - type: horizontal-stack
             cards:
-              - type: button
+              - show_name: true
+                show_icon: true
+                type: button
                 entity: switch.jacuzzi_hot_tub_hot_tub_pump_1
                 name: Jets 1
                 icon: mdi:pump
@@ -64,6 +66,17 @@ views:
                 show_state: true
                 tap_action:
                   action: toggle
+              - show_name: true
+                show_icon: true
+                type: button
+                entity: button.jacuzzi_hot_tub_jacuzzi_filter_boost
+                name: Filter Boost
+                icon: mdi:pump
+                tap_action:
+                  action: call-service
+                  service: button.press
+                  target:
+                    entity_id: button.jacuzzi_filter_boost
           - type: heading
             heading: 💡 Lighting
           - type: entities
@@ -174,4 +187,52 @@ views:
               - entity: select.jacuzzi_hot_tub_jacuzzi_cycle_2_mode
                 name: Cycle 2 Mode
                 icon: mdi:filter-variant
+      - type: grid
+        cards:
+          - type: heading
+            heading: 🔌 Connection Health
+          - type: custom:apexcharts-card
+            header:
+              show: true
+              title: Connection Restarts Over Time
+              show_states: true
+            graph_span: 7d
+            update_interval: 1m
+            apex_config:
+              chart:
+                height: 200
+              stroke:
+                width: 2
+                curve: stepline
+              markers:
+                size: 3
+              legend:
+                show: true
+              xaxis:
+                type: datetime
+            yaxis:
+              - id: restarts
+                decimals: 0
+                min: 0
+                apex_config:
+                  title:
+                    text: Total Restarts
+            series:
+              - entity: sensor.jacuzzi_hot_tub_jacuzzi_restart_count
+                name: Restart Count
+                yaxis_id: restarts
+                type: line
+                color: '#ff6b6b'
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: sensor.jacuzzi_hot_tub_jacuzzi_restart_count
+                name: Total Restarts
+                icon: mdi:restart
+              - entity: sensor.jacuzzi_hot_tub_jacuzzi_last_seen
+                name: Last Seen
+                icon: mdi:clock-outline
+              - entity: button.jacuzzi_hot_tub_jacuzzi_reset_restart_count
+                name: Reset Counter
+                icon: mdi:restore
 
