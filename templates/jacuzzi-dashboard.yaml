@@ -1,0 +1,177 @@
+views:
+  - title: Hot Tub
+    path: hot-tub
+    icon: mdi:hot-tub
+    type: sections
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: 🌡️ Temperature
+          - type: thermostat
+            entity: climate.jacuzzi
+            name: Thermostat
+          - type: heading
+            heading: ⚡ Power Usage
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: sensor.emporia_vue_2_b_circuit_31_power
+                name: Current Power
+              - entity: sensor.emporia_vue_2_b_circuit_31_daily_energy
+                name: Daily Energy
+              - entity: sensor.cost_circuit_31_daily
+                name: Daily Cost
+          - type: heading
+            heading: 📊 Status
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: binary_sensor.jacuzzi_hot_tub_jacuzzi_circulation_pump
+                name: Circulation Pump
+              - entity: binary_sensor.jacuzzi_hot_tub_jacuzzi_uv_lamp
+                name: UV Lamp
+              - entity: sensor.jacuzzi_heat_mode_status
+                name: Heat Mode
+                icon: mdi:heat-wave
+              - entity: sensor.jacuzzi_hot_tub_jacuzzi_heat_state
+                name: Heat State
+                icon: mdi:radiator
+              - entity: binary_sensor.jacuzzi_hot_tub_jacuzzi_heater_on
+                name: Heater
+                icon: mdi:fire
+              - entity: sensor.jacuzzi_hot_tub_jacuzzi_spa_time
+                name: Spa Time
+              - entity: sensor.jacuzzi_hot_tub_jacuzzi_spa_date
+                name: Spa Date
+      - type: grid
+        cards:
+          - type: heading
+            heading: 💨 Jets
+          - type: horizontal-stack
+            cards:
+              - type: button
+                entity: switch.jacuzzi_hot_tub_hot_tub_pump_1
+                name: Jets 1
+                icon: mdi:pump
+                show_state: true
+                tap_action:
+                  action: toggle
+              - type: button
+                entity: switch.jacuzzi_hot_tub_hot_tub_pump_2
+                name: Jets 2
+                icon: mdi:pump
+                show_state: true
+                tap_action:
+                  action: toggle
+          - type: heading
+            heading: 💡 Lighting
+          - type: entities
+            entities:
+              - entity: select.jacuzzi_hot_tub_jacuzzi_light_mode
+                name: Light Mode
+              - entity: number.jacuzzi_hot_tub_jacuzzi_light_brightness
+                name: Brightness
+          - type: heading
+            heading: 📈 Charts
+          - type: custom:apexcharts-card
+            header:
+              show: true
+              title: Jacuzzi — Circ Pump, Pumps, Temp & Setpoint
+              show_states: true
+            graph_span: 1h
+            update_interval: 30s
+            apex_config:
+              chart:
+                height: 380
+              stroke:
+                width: 2
+                curve: stepline
+              markers:
+                size: 0
+              legend:
+                show: true
+              xaxis:
+                type: datetime
+            yaxis:
+              - id: temp
+                decimals: 1
+                min: 50
+                max: 104
+                apex_config:
+                  title:
+                    text: Temp / Target (°F)
+              - id: pumps
+                opposite: true
+                decimals: 0
+                min: -0.1
+                max: 1.1
+                apex_config:
+                  title:
+                    text: Pumps (0/1)
+            series:
+              - entity: sensor.jacuzzi_hot_tub_hot_tub_temperature
+                name: Water Temp
+                yaxis_id: temp
+                type: line
+              - entity: number.jacuzzi_hot_tub_jacuzzi_target_temperature_2
+                name: Target Temp
+                yaxis_id: temp
+                type: line
+              - entity: binary_sensor.jacuzzi_hot_tub_jacuzzi_circulation_pump
+                name: Circ Pump (running)
+                yaxis_id: pumps
+                type: line
+                transform: 'return x === ''on'' ? 1 : 0'
+              - entity: switch.jacuzzi_hot_tub_hot_tub_pump_1
+                name: Pump 1
+                yaxis_id: pumps
+                type: line
+                transform: 'return x === ''on'' ? 1 : 0'
+              - entity: switch.jacuzzi_hot_tub_hot_tub_pump_2
+                name: Pump 2
+                yaxis_id: pumps
+                type: line
+                transform: 'return x === ''on'' ? 1 : 0'
+      - type: grid
+        cards:
+          - type: heading
+            heading: ⚙️ Spa Settings
+          - type: entities
+            show_header_toggle: false
+            entities:
+              - entity: select.jacuzzi_hot_tub_jacuzzi_heat_mode_2
+                name: Heat Mode
+                icon: mdi:leaf
+              - type: section
+                label: Spa Time / Date
+              - entity: sensor.jacuzzi_hot_tub_jacuzzi_spa_time
+                name: Spa Time
+                icon: mdi:clock-outline
+              - entity: sensor.jacuzzi_hot_tub_jacuzzi_spa_date
+                name: Spa Date
+                icon: mdi:calendar
+              - entity: text.jacuzzi_hot_tub_jacuzzi_set_spa_time_hh_mm
+                name: Set Spa Time (HH:MM)
+                icon: mdi:clock-edit-outline
+              - entity: text.jacuzzi_hot_tub_jacuzzi_set_spa_date_yyyy_mm_dd
+                name: Set Spa Date (YYYY-MM-DD)
+                icon: mdi:calendar-edit
+              - type: section
+                label: Filter Cycle 1
+              - entity: number.jacuzzi_hot_tub_jacuzzi_filter_cycle_1_start_hour
+                name: Start Hour
+                icon: mdi:clock-start
+              - entity: number.jacuzzi_hot_tub_jacuzzi_filter_cycle_1_duration_hrs
+                name: Duration (hrs)
+                icon: mdi:timer-outline
+              - entity: >-
+                  number.jacuzzi_hot_tub_jacuzzi_filter_cycle_1_frequency_per_day
+                name: Frequency (per day)
+                icon: mdi:repeat
+              - type: section
+                label: Filter Cycle 2
+              - entity: select.jacuzzi_hot_tub_jacuzzi_cycle_2_mode
+                name: Cycle 2 Mode
+                icon: mdi:filter-variant
+
