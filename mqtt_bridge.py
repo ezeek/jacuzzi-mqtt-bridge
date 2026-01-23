@@ -9,8 +9,11 @@ import json
 import logging
 import os
 import signal
+import socket
 import sys
+import threading
 import time
+from datetime import datetime
 
 import paho.mqtt.client as mqtt
 
@@ -33,12 +36,99 @@ READFAIL_RESTART_ENABLE = os.getenv('READFAIL_RESTART_ENABLE', '1') == '1'
 READFAIL_RESTART_COUNT = int(os.getenv('READFAIL_RESTART_COUNT', '2'))
 READFAIL_WINDOW_S = int(os.getenv('READFAIL_WINDOW_S', '4'))
 
+# Optional debug/tap ports (plain text + JSON)
+ENABLE_TAP_8889 = os.getenv('ENABLE_TAP_8889', '0') == '1'
+ENABLE_RXONLY_8890 = os.getenv('ENABLE_RXONLY_8890', '0') == '1'
+ENABLE_JSON_8891 = os.getenv('ENABLE_JSON_8891', '0') == '1'
+TAP_PORT_8889 = int(os.getenv('TAP_PORT_8889', '8889'))
+TAP_PORT_8890 = int(os.getenv('TAP_PORT_8890', '8890'))
+TAP_PORT_8891 = int(os.getenv('TAP_PORT_8891', '8891'))
+
 # Setup logging
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+class TapServer:
+    """
+    Tiny TCP broadcast server:
+      - Accept multiple clients
+      - push(line) sends to all clients
+    """
+    def __init__(self, port: int, name: str):
+        self.port = port
+        self.name = name
+        self._sock = None
+        self._clients = set()
+        self._lock = threading.Lock()
+        self._thread = None
+        self._running = False
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        logger.info(f"🔌 TapServer {self.name} listening on 0.0.0.0:{self.port}")
+
+    def stop(self):
+        self._running = False
+        try:
+            if self._sock:
+                self._sock.close()
+        except Exception:
+            pass
+        with self._lock:
+            for c in list(self._clients):
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            self._clients.clear()
+
+    def push(self, line: str):
+        if not self._running:
+            return
+        data = (line.rstrip("\n") + "\n").encode("utf-8", errors="replace")
+        dead = []
+        with self._lock:
+            for c in self._clients:
+                try:
+                    c.sendall(data)
+                except Exception:
+                    dead.append(c)
+            for c in dead:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+                self._clients.discard(c)
+
+    def _run(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("0.0.0.0", self.port))
+        s.listen(8)
+        s.settimeout(1.0)
+        self._sock = s
+        while self._running:
+            try:
+                conn, addr = s.accept()
+            except socket.timeout:
+                continue
+            except Exception:
+                break
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            with self._lock:
+                self._clients.add(conn)
+            try:
+                conn.sendall(f"# connected to {self.name} on {self.port}\n".encode())
+            except Exception:
+                pass
 
 
 class ReadFailHandler(logging.Handler):
@@ -71,6 +161,14 @@ class PureJacuzziMQTTBridge:
         self.read_fail_times = []  # List of timestamps when read fails occurred
         self.restart_count = 0  # Track number of auto-restarts
         self.last_message_time = 0  # Track last time we received a message
+        
+        # Optional tap servers
+        self.tap_all = TapServer(TAP_PORT_8889, "tap8889 RX+TX") if ENABLE_TAP_8889 else None
+        self.tap_rx = TapServer(TAP_PORT_8890, "tap8890 RX-only") if ENABLE_RXONLY_8890 else None
+        self.tap_json = TapServer(TAP_PORT_8891, "tap8891 JSON") if ENABLE_JSON_8891 else None
+        
+        # TX capture (best-effort without patching jacuzzi.py)
+        self._tx_buf = bytearray()
     
     async def _set_2state_pump(self, pump_num: int, desired_state: int):
         """Set a 2-state pump (OFF=0, ON=1) reliably.
@@ -769,6 +867,68 @@ class PureJacuzziMQTTBridge:
         except Exception as e:
             logger.error(f"Error publishing state: {e}", exc_info=True)
     
+    def _tap_emit(self, direction: str, hex_str: str):
+        """
+        direction: "RX" or "TX"
+        hex_str: lowercase hex of a single 7e..7e frame (no spaces)
+        """
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        line = f"[{ts}] {direction}: {hex_str}"
+        if self.tap_all:
+            self.tap_all.push(line)
+        if direction == "RX" and self.tap_rx:
+            self.tap_rx.push(line)
+        if self.tap_json:
+            obj = {"ts": ts, "dir": direction, "hex": hex_str}
+            self.tap_json.push(json.dumps(obj, separators=(",", ":")))
+    
+    def _split_frames_7e(self, blob: bytes):
+        """Split a byte stream into 7e..7e framed packets, returning full frames."""
+        self._tx_buf.extend(blob)
+        frames = []
+        while True:
+            try:
+                start = self._tx_buf.index(0x7E)
+            except ValueError:
+                self._tx_buf.clear()
+                break
+            if start > 0:
+                del self._tx_buf[:start]
+            try:
+                end = self._tx_buf.index(0x7E, 1)
+            except ValueError:
+                break
+            frame = bytes(self._tx_buf[:end+1])
+            del self._tx_buf[:end+1]
+            frames.append(frame)
+        return frames
+    
+    def _try_hook_writer_for_tx(self):
+        """Best-effort TX capture by wrapping spa.writer.write() once it exists."""
+        try:
+            w = getattr(self.spa, "writer", None)
+            if not w:
+                return False
+            if getattr(w, "_tap_wrapped", False):
+                return True
+            orig_write = w.write
+            bridge = self
+
+            def write_wrapper(data):
+                try:
+                    for frame in bridge._split_frames_7e(data):
+                        bridge._tap_emit("TX", frame.hex())
+                except Exception:
+                    pass
+                return orig_write(data)
+
+            w.write = write_wrapper
+            w._tap_wrapped = True
+            logger.info("✅ Hooked spa.writer.write() for TX tap (best-effort)")
+            return True
+        except Exception:
+            return False
+    
     async def monitor_changes(self):
         """
         Monitor spa.lastupd for changes - EXACTLY like terminal UI does.
@@ -852,6 +1012,14 @@ class PureJacuzziMQTTBridge:
         restart_requested = False
         
         try:
+            # Start tap servers early
+            if self.tap_all:
+                self.tap_all.start()
+            if self.tap_rx:
+                self.tap_rx.start()
+            if self.tap_json:
+                self.tap_json.start()
+            
             # Setup MQTT
             self.setup_mqtt()
             
@@ -873,6 +1041,9 @@ class PureJacuzziMQTTBridge:
                 """Wrapper to log all messages being processed"""
                 # Update last message timestamp
                 self.last_message_time = time.time()
+                
+                # Try hook writer after we know we're getting traffic
+                self._try_hook_writer_for_tx()
                 
                 if data and len(data) > 4:
                     hex_str = data.hex()
@@ -901,6 +1072,9 @@ class PureJacuzziMQTTBridge:
                     # Log the hex and decoded type
                     logger.info(f"📨 RX: {hex_str}")
                     logger.info(f"   └─> {msg_name}")
+                    
+                    # Tap RX frame out (single 7e..7e frame)
+                    self._tap_emit("RX", hex_str)
                     
                     # If it's a status update, decode some key fields
                     if msg_type_byte == 0x16 and len(data) >= 26:
@@ -964,6 +1138,17 @@ class PureJacuzziMQTTBridge:
             if self.mqtt:
                 self.mqtt.loop_stop()
                 self.mqtt.disconnect()
+            
+            # Stop tap servers
+            try:
+                if self.tap_all:
+                    self.tap_all.stop()
+                if self.tap_rx:
+                    self.tap_rx.stop()
+                if self.tap_json:
+                    self.tap_json.stop()
+            except Exception:
+                pass
             
             logger.info("Cleanup complete")
             
