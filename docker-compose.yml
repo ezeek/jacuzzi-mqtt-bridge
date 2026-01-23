@@ -5,28 +5,42 @@ services:
     build: .
     container_name: jacuzzi-mqtt-bridge
     restart: unless-stopped
+
+    ports:
+      - "8889:8889"   # RX/TX framed hex stream
+      - "8890:8890"   # RX-only framed hex stream
+      - "8891:8891"   # RX-only JSON stream
+
     environment:
-      - JACUZZI_IP=
-      - JACUZZI_PORT=4257
-      - MQTT_BROKER=
-      - MQTT_PORT=1883
-      # IMPORTANT: Set your MQTT credentials if your broker requires authentication
-      # Leave empty for anonymous access
-      - MQTT_USERNAME=
-      - MQTT_PASSWORD=
-      - MQTT_CLIENT_ID=jacuzzi-mqtt-bridge
-      - MQTT_DISCOVERY_PREFIX=homeassistant
-      - MQTT_BASE_TOPIC=jacuzzi
-      # Set to DEBUG to see detailed MQTT connection info
-      - LOG_LEVEL=INFO
-      # Auto-reconnect on read failures
-      - READFAIL_RESTART_ENABLE=1
-      - READFAIL_RESTART_COUNT=3    # Restart after 3 read fails
-      - READFAIL_WINDOW_S=5          # Within 5 second window
-    network_mode: host
-    # Optional: Add healthcheck
+      # Jacuzzi / Prolink connection
+      JACUZZI_IP: 
+      JACUZZI_PORT: 
+
+      # MQTT
+      MQTT_BROKER: 
+      MQTT_PORT: 1883
+      MQTT_USERNAME: 
+      MQTT_PASSWORD: 
+      MQTT_CLIENT_ID: jacuzzi-mqtt-bridge
+      MQTT_BASE_TOPIC: jacuzzi
+      MQTT_DISCOVERY_PREFIX: homeassistant
+
+      # Logging
+      LOG_LEVEL: INFO   # DEBUG if needed
+
+      # Read-failure auto-restart logic
+      READFAIL_RESTART_ENABLE: "1"
+      READFAIL_RESTART_COUNT: "3"
+      READFAIL_WINDOW_S: "5"
+
+      # Debug / tap controls (safe even if unused)
+      ENABLE_TAP_8889: "1"
+      ENABLE_RXONLY_8890: "1"
+      ENABLE_JSON_8891: "1"
+
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f mqtt_bridge.py || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+
