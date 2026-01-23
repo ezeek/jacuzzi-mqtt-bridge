@@ -159,7 +159,8 @@ class PureJacuzziMQTTBridge:
         
         # Read fail tracking for auto-restart
         self.read_fail_times = []  # List of timestamps when read fails occurred
-        self.restart_count = 0  # Track number of auto-restarts
+        self.restart_count = None  # Will be loaded from retained MQTT message
+        self.restart_count_loaded = False  # Track if we've loaded the persisted value
         self.last_message_time = 0  # Track last time we received a message
         
         # Optional tap servers
@@ -253,6 +254,8 @@ class PureJacuzziMQTTBridge:
         # Check if we've hit the threshold
         if fail_count >= READFAIL_RESTART_COUNT:
             logger.error(f"🔴 THRESHOLD REACHED: {fail_count} read fails in {READFAIL_WINDOW_S}s - triggering restart")
+            if self.restart_count is None:
+                self.restart_count = 0
             self.restart_count += 1
             self.running = False
         
@@ -286,8 +289,15 @@ class PureJacuzziMQTTBridge:
             
         if code == 0:
             logger.info("MQTT connected")
+            
+            # Subscribe to command topics
             result = client.subscribe(f"{MQTT_BASE_TOPIC}/+/set")
             logger.info(f"Subscribed to {MQTT_BASE_TOPIC}/+/set, result: {result}")
+            
+            # Subscribe to restart_count to load persisted value
+            client.subscribe(f"{MQTT_BASE_TOPIC}/restart_count")
+            logger.info(f"Subscribed to {MQTT_BASE_TOPIC}/restart_count to load persisted value")
+            
             self.send_discovery()
         else:
             logger.error(f"MQTT connection failed: {code}")
@@ -299,6 +309,18 @@ class PureJacuzziMQTTBridge:
             payload = msg.payload.decode('utf-8')
             
             logger.info(f"MQTT RX: topic={topic}, payload={payload}")
+            
+            # Load persisted restart_count on startup
+            if topic == f"{MQTT_BASE_TOPIC}/restart_count" and not self.restart_count_loaded:
+                try:
+                    self.restart_count = int(payload)
+                    self.restart_count_loaded = True
+                    logger.info(f"✅ Loaded persisted restart_count: {self.restart_count}")
+                except ValueError:
+                    self.restart_count = 0
+                    self.restart_count_loaded = True
+                    logger.warning(f"Failed to parse restart_count, initializing to 0")
+                return
             
             # Extract command from topic
             parts = topic.split('/')
@@ -459,6 +481,12 @@ class PureJacuzziMQTTBridge:
                 raw_cmd = bytes.fromhex("7e060abf170da37e")
                 self.spa.writer.write(raw_cmd)
                 await self.spa.writer.drain()
+            
+            elif command == "restart_count_reset":
+                # Reset the restart counter
+                logger.info("Resetting restart_count to 0")
+                self.restart_count = 0
+                self.mqtt.publish(f"{MQTT_BASE_TOPIC}/restart_count", 0, retain=True)
             
                 
         except Exception as e:
@@ -801,6 +829,52 @@ class PureJacuzziMQTTBridge:
             retain=True
         )
         
+        # Diagnostic Sensors
+        
+        # Restart count (how many times connection has auto-restarted)
+        self.mqtt.publish(
+            f"{base}/sensor/jacuzzi_restart_count/config",
+            json.dumps({
+                "name": "Jacuzzi Restart Count",
+                "state_topic": f"{MQTT_BASE_TOPIC}/restart_count",
+                "unique_id": "jacuzzi_restart_count",
+                "icon": "mdi:restart",
+                "entity_category": "diagnostic",
+                "device": device
+            }),
+            retain=True
+        )
+        
+        # Last seen (seconds since last message received)
+        self.mqtt.publish(
+            f"{base}/sensor/jacuzzi_last_seen/config",
+            json.dumps({
+                "name": "Jacuzzi Last Seen",
+                "state_topic": f"{MQTT_BASE_TOPIC}/last_seen",
+                "unit_of_measurement": "s",
+                "unique_id": "jacuzzi_last_seen",
+                "icon": "mdi:clock-outline",
+                "entity_category": "diagnostic",
+                "device": device
+            }),
+            retain=True
+        )
+        
+        # Reset restart count button
+        self.mqtt.publish(
+            f"{base}/button/jacuzzi_restart_count_reset/config",
+            json.dumps({
+                "name": "Jacuzzi Reset Restart Count",
+                "command_topic": f"{MQTT_BASE_TOPIC}/restart_count_reset/set",
+                "payload_press": "RESET",
+                "unique_id": "jacuzzi_restart_count_reset",
+                "icon": "mdi:restore",
+                "entity_category": "diagnostic",
+                "device": device
+            }),
+            retain=True
+        )
+        
         logger.info("Discovery complete")
     
     def publish_state(self):
@@ -1036,6 +1110,8 @@ class PureJacuzziMQTTBridge:
                 time_since_update = time.time() - last_successful_update
                 if time_since_update > 30 and self.spa and self.spa.connected and last_lastupd > 0:
                     logger.error(f"ProLink not responding for {time_since_update:.0f}s (fallback timeout) - triggering reconnect")
+                    if self.restart_count is None:
+                        self.restart_count = 0
                     self.restart_count += 1
                     self.running = False
                     return True
@@ -1051,7 +1127,9 @@ class PureJacuzziMQTTBridge:
                         seconds_since = int(now - self.last_message_time)
                         self.mqtt.publish(f"{MQTT_BASE_TOPIC}/last_seen", seconds_since, retain=True)
                     
-                    # Publish restart_count
+                    # Publish restart_count (initialize to 0 if not loaded yet)
+                    if self.restart_count is None:
+                        self.restart_count = 0
                     self.mqtt.publish(f"{MQTT_BASE_TOPIC}/restart_count", self.restart_count, retain=True)
                     
                     last_periodic_publish = now
