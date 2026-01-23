@@ -13,8 +13,8 @@ services:
 
     environment:
       # Jacuzzi / Prolink connection
-      JACUZZI_IP: 
-      JACUZZI_PORT: 
+      JACUZZI_IP:  
+      JACUZZI_PORT: 4257
 
       # MQTT
       MQTT_BROKER: 
